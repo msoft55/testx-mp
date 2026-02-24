@@ -12,7 +12,7 @@ Author: Claude
 import re
 import traceback
 import xml.dom.minidom
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple, Callable
 from datetime import datetime
 from urllib.parse import urlencode
 import unicodedata
@@ -46,7 +46,7 @@ class JackettIndexer(_PluginBase):
     plugin_name = "Jackett索引器"
     plugin_desc = "集成Jackett索引器搜索，支持Torznab协议多站点搜索。仅索引私有和半公开站点。"
     plugin_icon = "Jackett_A.png"
-    plugin_version = "1.5.0"
+    plugin_version = "1.6.0"
     plugin_author = "Claude"
     author_url = "https://github.com"
     plugin_config_prefix = "jackettindexer_"
@@ -64,6 +64,9 @@ class JackettIndexer(_PluginBase):
     _scheduler: Optional[BackgroundScheduler] = None
     _sites_helper: Optional[SitesHelper] = None
     _last_update: Optional[datetime] = None
+    # 搜索链补丁：保存被替换的原始方法
+    _original_search_all: Optional[Callable] = None
+    _original_async_search_all: Optional[Callable] = None
 
     # Domain identifier for indexer (matching reference implementation pattern)
     # Format: plugin_name.author
@@ -147,6 +150,9 @@ class JackettIndexer(_PluginBase):
             logger.debug(f"【{self.plugin_name}】注册到站点管理：{indexer.get('name')} (domain: {domain})")
 
         logger.info(f"【{self.plugin_name}】插件初始化完成，共注册 {len(self._indexers)} 个索引器")
+
+        # 应用搜索链补丁：媒体搜索时对中文关键词自动回退英文标题
+        self._apply_search_patch()
 
     def _fetch_and_build_indexers(self) -> bool:
         """
@@ -496,6 +502,180 @@ class JackettIndexer(_PluginBase):
 
         return indexer_dict, is_xxx_only
 
+    # ------------------------------------------------------------------ #
+    #  搜索链补丁：支持中文媒体搜索时对英文索引器使用英文标题回退
+    # ------------------------------------------------------------------ #
+
+    def _apply_search_patch(self):
+        """
+        向 SearchChain._SearchChain__search_all_sites 注入补丁。
+        当搜索关键词为中文且 mediainfo 含英文标题时，对本插件自己的索引器
+        额外使用英文标题发起一次补充搜索，解决 Jackett 无法处理中文关键词的问题。
+        """
+        try:
+            from app.chain.search import SearchChain
+        except ImportError:
+            logger.warning(f"【{self.plugin_name}】无法导入 SearchChain，跳过搜索链补丁")
+            return
+
+        marker = f"_en_fallback_{self.plugin_config_prefix}"
+
+        # 避免重复注入
+        if getattr(SearchChain._SearchChain__search_all_sites, marker, False):
+            logger.debug(f"【{self.plugin_name}】搜索链补丁已存在，跳过")
+            return
+
+        plugin_ref = self
+        prev_sync = SearchChain._SearchChain__search_all_sites
+        prev_async = SearchChain._SearchChain__async_search_all_sites
+        self._original_search_all = prev_sync
+        self._original_async_search_all = prev_async
+
+        def patched_sync(chain_self, keyword, mediainfo=None, sites=None, page=0, area="title"):
+            results = list(prev_sync(chain_self, keyword, mediainfo, sites, page, area) or [])
+            if not plugin_ref._enabled or not plugin_ref._indexers:
+                return results
+            if not mediainfo or not keyword or area == "imdbid":
+                return results
+            if not StringUtils.is_chinese(keyword):
+                return results
+            en_keyword = plugin_ref._get_en_keyword(mediainfo)
+            if not en_keyword:
+                logger.debug(f"【{plugin_ref.plugin_name}】中文关键词 '{keyword}' 无可用英文标题，跳过补充搜索")
+                return results
+            logger.info(f"【{plugin_ref.plugin_name}】检测到中文关键词，对本插件索引器补充搜索英文标题：{en_keyword}")
+            extra = plugin_ref._extra_search_sync(chain_self, en_keyword, mediainfo, sites, page)
+            if extra:
+                results.extend(extra)
+            return results
+
+        async def patched_async(chain_self, keyword, mediainfo=None, sites=None, page=0, area="title"):
+            results = list(await prev_async(chain_self, keyword, mediainfo, sites, page, area) or [])
+            if not plugin_ref._enabled or not plugin_ref._indexers:
+                return results
+            if not mediainfo or not keyword or area == "imdbid":
+                return results
+            if not StringUtils.is_chinese(keyword):
+                return results
+            en_keyword = plugin_ref._get_en_keyword(mediainfo)
+            if not en_keyword:
+                logger.debug(f"【{plugin_ref.plugin_name}】中文关键词 '{keyword}' 无可用英文标题，跳过补充搜索")
+                return results
+            logger.info(f"【{plugin_ref.plugin_name}】检测到中文关键词，对本插件索引器补充异步搜索英文标题：{en_keyword}")
+            extra = await plugin_ref._extra_search_async(chain_self, en_keyword, mediainfo, sites, page)
+            if extra:
+                results.extend(extra)
+            return results
+
+        setattr(patched_sync, marker, True)
+        setattr(patched_async, marker, True)
+        SearchChain._SearchChain__search_all_sites = patched_sync
+        SearchChain._SearchChain__async_search_all_sites = patched_async
+        logger.info(f"【{self.plugin_name}】搜索链补丁注入成功")
+
+    def _remove_search_patch(self):
+        """
+        恢复被补丁替换的 SearchChain 方法。
+        仅在当前最顶层补丁是本插件时才执行恢复，保证多插件链式补丁的正确性。
+        """
+        try:
+            from app.chain.search import SearchChain
+            marker = f"_en_fallback_{self.plugin_config_prefix}"
+            if (self._original_search_all is not None and
+                    getattr(SearchChain._SearchChain__search_all_sites, marker, False)):
+                SearchChain._SearchChain__search_all_sites = self._original_search_all
+                self._original_search_all = None
+                logger.info(f"【{self.plugin_name}】搜索链同步补丁已恢复")
+            if (self._original_async_search_all is not None and
+                    getattr(SearchChain._SearchChain__async_search_all_sites, marker, False)):
+                SearchChain._SearchChain__async_search_all_sites = self._original_async_search_all
+                self._original_async_search_all = None
+                logger.info(f"【{self.plugin_name}】搜索链异步补丁已恢复")
+        except Exception as e:
+            logger.error(f"【{self.plugin_name}】恢复搜索链补丁失败：{e}")
+
+    @staticmethod
+    def _get_en_keyword(mediainfo) -> Optional[str]:
+        """
+        从 mediainfo 中提取英文/非中文标题作为回退关键词。
+        优先使用 en_title，其次使用非中文的 original_title。
+        """
+        if mediainfo.en_title:
+            return mediainfo.en_title
+        if mediainfo.original_title and not StringUtils.is_chinese(mediainfo.original_title):
+            return mediainfo.original_title
+        return None
+
+    def _extra_search_sync(self, chain_self, en_keyword: str, mediainfo, sites, page: int) -> list:
+        """
+        同步：对本插件自己的索引器用英文标题发起补充搜索。
+        遵循与 __search_all_sites 相同的站点启用过滤逻辑。
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from app.db.systemconfig_oper import SystemConfigOper
+        from app.schemas.types import SystemConfigKey
+
+        enabled_ids = sites or SystemConfigOper().get(SystemConfigKey.IndexerSites) or []
+        indexers = [
+            idx for idx in list(self._indexers)
+            if not enabled_ids or idx.get("id") in enabled_ids
+        ]
+        if not indexers:
+            return []
+
+        results = []
+        with ThreadPoolExecutor(max_workers=len(indexers)) as executor:
+            tasks = [
+                executor.submit(self.search_torrents,
+                                site=s, keyword=en_keyword,
+                                mtype=mediainfo.type if mediainfo else None,
+                                page=page)
+                for s in indexers
+            ]
+            for future in as_completed(tasks):
+                try:
+                    result = future.result()
+                    if result:
+                        results.extend(result)
+                except Exception as e:
+                    logger.error(f"【{self.plugin_name}】补充搜索异常：{e}")
+        logger.info(f"【{self.plugin_name}】英文标题补充搜索完成，关键词：{en_keyword}，获得 {len(results)} 个结果")
+        return results
+
+    async def _extra_search_async(self, chain_self, en_keyword: str, mediainfo, sites, page: int) -> list:
+        """
+        异步：对本插件自己的索引器用英文标题发起补充搜索。
+        """
+        import asyncio
+        from app.db.systemconfig_oper import SystemConfigOper
+        from app.schemas.types import SystemConfigKey
+
+        enabled_ids = sites or SystemConfigOper().get(SystemConfigKey.IndexerSites) or []
+        indexers = [
+            idx for idx in list(self._indexers)
+            if not enabled_ids or idx.get("id") in enabled_ids
+        ]
+        if not indexers:
+            return []
+
+        results = []
+        tasks = [
+            chain_self.async_search_torrents(
+                site=s, keyword=en_keyword,
+                mtype=mediainfo.type if mediainfo else None,
+                page=page)
+            for s in indexers
+        ]
+        for coro in asyncio.as_completed(tasks):
+            try:
+                result = await coro
+                if result:
+                    results.extend(result)
+            except Exception as e:
+                logger.error(f"【{self.plugin_name}】补充异步搜索异常：{e}")
+        logger.info(f"【{self.plugin_name}】英文标题补充异步搜索完成，关键词：{en_keyword}，获得 {len(results)} 个结果")
+        return results
+
     def get_state(self) -> bool:
         """
         Get plugin enabled state.
@@ -520,6 +700,9 @@ class JackettIndexer(_PluginBase):
                     logger.info(f"【{self.plugin_name}】定时任务已停止")
                 except Exception as e:
                     logger.error(f"【{self.plugin_name}】停止定时任务失败：{str(e)}")
+
+            # 恢复搜索链原始方法
+            self._remove_search_patch()
 
             # Note: We intentionally do NOT unregister indexers from site management
             # This allows sites to persist between plugin restarts and MoviePilot reboots

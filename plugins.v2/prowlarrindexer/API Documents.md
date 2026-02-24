@@ -2,8 +2,8 @@ API DOCUMENTS
 =============
 
 Prowlarr/Jackett Indexer Plugins for MoviePilot
-Version: 1.5.0
-Last Updated: 2026-02-15
+Version: 1.6.0
+Last Updated: 2026-02-23
 
 ========================================
 TABLE OF CONTENTS
@@ -58,6 +58,48 @@ get_module()
             "search_torrents": function,
             "async_search_torrents": function
         }
+
+_apply_search_patch()
+    Description: Inject monkey-patch into SearchChain._SearchChain__search_all_sites.
+                 When a Chinese keyword is detected and mediainfo contains an English title
+                 (en_title or non-Chinese original_title), performs a supplemental search
+                 against this plugin's own indexers using the English title.
+                 Called automatically during init_plugin.
+    Access: Private
+
+_remove_search_patch()
+    Description: Restore the original SearchChain method saved during patching.
+                 Only restores if this plugin is currently the top-level patcher,
+                 preserving correct chained-patch behavior when multiple plugins patch.
+                 Called automatically during stop_service.
+    Access: Private
+
+_get_en_keyword(mediainfo)
+    Description: Extract English/non-Chinese fallback keyword from mediainfo.
+    Parameters:
+        mediainfo (MediaInfo): Movie/TV media information object
+    Returns: str (en_title if set, else non-Chinese original_title, else None)
+    Static: Yes
+    Access: Private
+
+_extra_search_sync(chain_self, en_keyword, mediainfo, sites, page)
+    Description: Synchronous supplemental search for this plugin's indexers using
+                 the English keyword. Respects the same site-enable filter as
+                 __search_all_sites (SystemConfigKey.IndexerSites).
+    Parameters:
+        chain_self: SearchChain instance
+        en_keyword (str): English search keyword
+        mediainfo (MediaInfo): Media information
+        sites (list): User-specified site ID list (None = use system config)
+        page (int): Page number
+    Returns: List of TorrentInfo objects
+    Access: Private
+
+_extra_search_async(chain_self, en_keyword, mediainfo, sites, page)
+    Description: Async version of _extra_search_sync.
+    Parameters: Same as _extra_search_sync
+    Returns: List of TorrentInfo objects
+    Access: Private
 
 search_torrents(site, keyword, mtype, page)
     Description: Search torrents through Prowlarr API
@@ -146,6 +188,12 @@ get_indexers()
     Same as ProwlarrIndexer
 
 get_api()
+    Same as ProwlarrIndexer
+
+_apply_search_patch() / _remove_search_patch()
+    Same as ProwlarrIndexer
+
+_get_en_keyword(mediainfo) / _extra_search_sync(...) / _extra_search_async(...)
     Same as ProwlarrIndexer
 
 get_command()
@@ -469,7 +517,10 @@ Error Responses:
 Usage Notes:
     - IMDb ID searches are more accurate than keyword searches
     - English keywords work better than non-English keywords
-    - Keyword filtering is automatic (non-English keywords are skipped)
+    - Chinese keyword fallback: when MoviePilot media search sends a Chinese keyword,
+      the plugin automatically issues a supplemental search using the English title
+      from mediainfo (en_title or non-Chinese original_title), so Prowlarr/Jackett
+      indexers are no longer skipped during Chinese-language media searches
     - Results are limited to 100 per page
     - Use pagination for large result sets
     - Some indexers may return empty results (check Prowlarr/Jackett logs)
@@ -1042,12 +1093,27 @@ For more information, see:
 - Source code: plugins.v2/prowlarrindexer/__init__.py
 - Source code: plugins.v2/jackettindexer/__init__.py
 
-Last updated: 2026-02-15
-Version: 1.5.0
+Last updated: 2026-02-23
+Version: 1.6.0
 
 ========================================
 CHANGELOG
 ========================================
+
+v1.6.0 (2026-02-23)
+-------------------
+- Chinese keyword fallback for media search (both Prowlarr and Jackett)
+  - Injects a monkey-patch into SearchChain._SearchChain__search_all_sites
+  - When MoviePilot media search sends a Chinese keyword, the patch runs a
+    supplemental search for this plugin's own indexers using the English title
+    extracted from mediainfo (en_title preferred, non-Chinese original_title
+    as fallback)
+  - Patch chains safely: each plugin saves the previous method and calls it,
+    so both plugins can coexist without interference
+  - Respects user's site enable/disable settings (SystemConfigKey.IndexerSites)
+  - Patch is applied on init_plugin and removed on stop_service
+  - New internal methods: _apply_search_patch, _remove_search_patch,
+    _get_en_keyword, _extra_search_sync, _extra_search_async
 
 v1.5.0 (2026-02-15)
 -------------------
