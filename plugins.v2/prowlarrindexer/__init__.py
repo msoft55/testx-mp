@@ -45,7 +45,7 @@ class ProwlarrIndexer(_PluginBase):
     plugin_name = "Prowlarr索引器"
     plugin_desc = "集成Prowlarr索引器搜索，支持多站点统一搜索。仅索引私有和半公开站点。"
     plugin_icon = "Prowlarr.png"
-    plugin_version = "1.6.0"
+    plugin_version = "1.7.0"
     plugin_author = "Claude"
     author_url = "https://github.com"
     plugin_config_prefix = "prowlarrindexer_"
@@ -436,6 +436,9 @@ class ProwlarrIndexer(_PluginBase):
         # Get category information from indexer and check if XXX-only
         category, is_xxx_only = self._get_indexer_categories(indexer_name)
 
+        # Build RSS URL (Prowlarr Torznab/Newznab endpoint with empty query = latest items)
+        rss_url = self._build_rss_url(indexer_id=indexer_name, category=category)
+
         # Build indexer dictionary (matching ProwlarrExtend reference implementation)
         indexer_dict = {
             "id": f"{self.plugin_name}-{indexer_title}",
@@ -445,6 +448,7 @@ class ProwlarrIndexer(_PluginBase):
             "public": is_public,
             "privacy": privacy,  # 存储原始隐私类型
             "proxy": False,
+            "rss": rss_url,  # Torznab RSS endpoint for latest torrents
         }
 
         # Add category if available
@@ -452,6 +456,42 @@ class ProwlarrIndexer(_PluginBase):
             indexer_dict["category"] = category
 
         return indexer_dict, is_xxx_only
+
+    def _build_rss_url(self, indexer_id: int, category: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> str:
+        """
+        Build Prowlarr Torznab/Newznab RSS URL for a specific indexer.
+
+        An empty query (q=) returns the latest items, functioning as an RSS feed.
+        The apikey is embedded in the URL as a query parameter so RssHelper can
+        fetch the feed without additional authentication headers.
+
+        Args:
+            indexer_id: Prowlarr indexer ID
+            category: Category dict from _get_indexer_categories (may be None)
+
+        Returns:
+            Prowlarr Newznab RSS URL string
+        """
+        # Determine Torznab categories based on indexer capabilities
+        cat_ids = []
+        if category:
+            if category.get("movie"):
+                cat_ids.append("2000")
+            if category.get("tv"):
+                cat_ids.append("5000")
+        if not cat_ids:
+            # Default: fetch both movies and TV
+            cat_ids = ["2000", "5000"]
+
+        params = [
+            ("t", "search"),
+            ("apikey", self._api_key),
+            ("q", ""),
+            ("cat", ",".join(cat_ids)),
+            ("limit", 100),
+        ]
+        query_string = urlencode(params)
+        return f"{self._host.rstrip('/')}/api/v1/indexer/{indexer_id}/newznab?{query_string}"
 
     # ------------------------------------------------------------------ #
     #  搜索链补丁：支持中文媒体搜索时对英文索引器使用英文标题回退
@@ -676,12 +716,14 @@ class ProwlarrIndexer(_PluginBase):
             logger.debug(f"【{self.plugin_name}】get_module 被调用，但插件未启用，返回空字典")
             return {}
 
-        # Register search methods
+        # Register search and refresh methods
         result = {
             "search_torrents": self.search_torrents,
             "async_search_torrents": self.async_search_torrents,
+            "refresh_torrents": self.refresh_torrents,
+            "async_refresh_torrents": self.async_refresh_torrents,
         }
-        logger.debug(f"【{self.plugin_name}】get_module 被调用，注册 search_torrents 和 async_search_torrents 方法")
+        logger.debug(f"【{self.plugin_name}】get_module 被调用，注册 search_torrents/async_search_torrents/refresh_torrents 方法")
         return result
 
     async def async_search_torrents(
@@ -699,6 +741,92 @@ class ProwlarrIndexer(_PluginBase):
 
         # Delegate to synchronous implementation
         return self.search_torrents(site, keyword, mtype, page)
+
+    def refresh_torrents(
+        self,
+        site: Dict[str, Any],
+        keyword: Optional[str] = None,
+        cat: Optional[str] = None,
+        page: Optional[int] = 0
+    ) -> List[TorrentInfo]:
+        """
+        Browse latest torrents from a Prowlarr indexer (spider mode).
+
+        Called by MoviePilot when SUBSCRIBE_MODE='spider'. Queries Prowlarr with
+        an empty keyword to retrieve the latest available torrents.
+
+        Args:
+            site: Site/indexer information dictionary
+            keyword: Optional keyword filter (unused in browse mode)
+            cat: Optional category filter (unused)
+            page: Page number for pagination
+
+        Returns:
+            List of TorrentInfo objects
+        """
+        if site is None or not isinstance(site, dict):
+            return []
+
+        site_name = site.get("name", "")
+        site_prefix = site_name.split("-")[0] if "-" in site_name else site_name
+        if site_prefix != self.plugin_name:
+            return []
+
+        # Extract indexer ID from domain
+        domain = site.get("domain", "")
+        domain_clean = domain.replace("http://", "").replace("https://", "").rstrip("/")
+        indexer_name_str = domain_clean.split(".")[-1]
+        if not indexer_name_str or not indexer_name_str.isdigit():
+            logger.warning(f"【{self.plugin_name}】[refresh] 无法从domain提取索引器ID：{domain}")
+            return []
+
+        indexer_id = int(indexer_name_str)
+        logger.info(f"【{self.plugin_name}】开始浏览站点最新种子：{site_name}，索引器ID：{indexer_id}")
+
+        try:
+            # Build params for latest-items query (empty q=)
+            params = [
+                ("indexerIds", indexer_id),
+                ("type", "search"),
+                ("query", ""),
+                ("limit", 100),
+                ("offset", page * 100 if page else 0),
+            ]
+            # Add default categories
+            for cat_id in [2000, 5000]:
+                params.append(("categories", cat_id))
+
+            api_results = self._search_prowlarr_api(params, indexer_id)
+            if not isinstance(api_results, list):
+                return []
+
+            results = []
+            for item in api_results:
+                try:
+                    torrent_info = self._parse_torrent_info(item, site_name)
+                    if torrent_info:
+                        results.append(torrent_info)
+                except Exception as e:
+                    logger.error(f"【{self.plugin_name}】[refresh] 解析种子失败：{str(e)}")
+
+            logger.info(f"【{self.plugin_name}】浏览完成：{site_name} 获取 {len(results)} 个种子")
+            return results
+
+        except Exception as e:
+            logger.error(f"【{self.plugin_name}】[refresh] 异常：{str(e)}\n{traceback.format_exc()}")
+            return []
+
+    async def async_refresh_torrents(
+        self,
+        site: Dict[str, Any],
+        keyword: Optional[str] = None,
+        cat: Optional[str] = None,
+        page: Optional[int] = 0
+    ) -> List[TorrentInfo]:
+        """
+        Async wrapper for refresh_torrents.
+        """
+        return self.refresh_torrents(site, keyword, cat, page)
 
     def search_torrents(
         self,
@@ -1486,8 +1614,47 @@ class ProwlarrIndexer(_PluginBase):
                     'privacy': privacy_text
                 })
 
+        # Build RSS links list (one <a> row per indexer)
+        rss_rows = []
+        for site in self._indexers:
+            rss_url = site.get("rss", "")
+            if not rss_url:
+                continue
+            # Strip plugin prefix from display name
+            display_name = site.get("name", "Unknown")
+            prefix = f"{self.plugin_name}-"
+            if display_name.startswith(prefix):
+                display_name = display_name[len(prefix):]
+            rss_rows.append({
+                'component': 'VRow',
+                'props': {'class': 'align-center py-1 px-2'},
+                'content': [
+                    {
+                        'component': 'VCol',
+                        'props': {'cols': 5, 'class': 'text-caption text-truncate'},
+                        'content': [{'component': 'span', 'text': display_name}]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {'cols': 7, 'class': 'text-caption'},
+                        'content': [
+                            {
+                                'component': 'a',
+                                'props': {
+                                    'href': rss_url,
+                                    'target': '_blank',
+                                    'title': rss_url
+                                },
+                                'text': 'RSS订阅链接'
+                            }
+                        ]
+                    }
+                ]
+            })
+
         # Build page elements
-        return [
+        page = [
+            # ── 状态行 ──────────────────────────────────
             {
                 'component': 'VRow',
                 'content': [
@@ -1507,6 +1674,36 @@ class ProwlarrIndexer(_PluginBase):
                     }
                 ]
             },
+            # ── 说明提示 ─────────────────────────────────
+            {
+                'component': 'VRow',
+                'content': [
+                    {
+                        'component': 'VCol',
+                        'props': {'cols': 12},
+                        'content': [
+                            {
+                                'component': 'VAlert',
+                                'props': {
+                                    'type': 'info',
+                                    'variant': 'tonal',
+                                    'border': 'start',
+                                    'title': '使用说明',
+                                    'text': (
+                                        '站点已自动注册，无需在站点管理中手动添加。\n'
+                                        '• 订阅模式（RSS）：将本插件站点加入「订阅站点」后，'
+                                        'MoviePilot 将通过下方 RSS 链接自动抓取最新种子。\n'
+                                        '• 刷流模式（Spider）：同样支持，可将站点加入刷流任务。\n'
+                                        '• 如需在站点管理中手动确认，站点 domain 格式为 '
+                                        'prowlarr_indexer.{索引器ID}，如下表所示。'
+                                    )
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            # ── 索引器总览表 ──────────────────────────────
             {
                 'component': 'VRow',
                 'content': [
@@ -1516,9 +1713,7 @@ class ProwlarrIndexer(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCard',
-                                'props': {
-                                    'class': 'pa-0'
-                                },
+                                'props': {'class': 'pa-0'},
                                 'content': [
                                     {
                                         'component': 'VCardText',
@@ -1529,7 +1724,7 @@ class ProwlarrIndexer(_PluginBase):
                                                     'class': 'text-sm',
                                                     'headers': headers,
                                                     'items': items,
-                                                    'height': '30rem',
+                                                    'height': '20rem',
                                                     'density': 'compact',
                                                     'fixed-header': True,
                                                     'hide-no-data': True,
@@ -1543,8 +1738,48 @@ class ProwlarrIndexer(_PluginBase):
                         ]
                     }
                 ]
-            }
+            },
         ]
+
+        # ── RSS 订阅链接列表（仅在有索引器时渲染）──────────
+        if rss_rows:
+            page.append({
+                'component': 'VRow',
+                'content': [
+                    {
+                        'component': 'VCol',
+                        'props': {'cols': 12},
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'props': {'class': 'pa-0'},
+                                'content': [
+                                    {
+                                        'component': 'VCardTitle',
+                                        'props': {'class': 'text-subtitle-1 px-4 pt-3'},
+                                        'text': 'RSS 订阅链接'
+                                    },
+                                    {
+                                        'component': 'VCardText',
+                                        'props': {'class': 'px-2 pb-2'},
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'props': {
+                                                    'style': 'max-height:20rem;overflow-y:auto'
+                                                },
+                                                'content': rss_rows
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            })
+
+        return page
 
     def get_indexers(self) -> List[Dict[str, Any]]:
         """
