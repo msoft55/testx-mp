@@ -1513,7 +1513,7 @@ class ProwlarrIndexer(_PluginBase):
                                             'variant': 'tonal',
                                             'border': 'start',
                                             'title': '配置步骤',
-                                            'text': '① 填写Prowlarr服务器地址和API密钥 → ② 保存并启用「立即运行一次」同步索引器 → ③ 在「站点管理」中添加站点（使用插件详情页的domain作为站点地址）'
+                                            'text': '① 填写Prowlarr服务器地址和API密钥 → ② 保存并启用「立即运行一次」同步索引器 → ③ 在「站点管理」中添加站点（使用插件详情页的domain作为站点地址）→ ④ （可选）上一步新增的站点中填入RSS地址'
                                         }
                                     }
                                 ]
@@ -1588,67 +1588,53 @@ class ProwlarrIndexer(_PluginBase):
 
         status_info.append(f'索引器数量：{len(self._indexers)}')
 
-        # Build headers
-        headers = [
-            {'title': '索引器名称', 'key': 'name', 'sortable': True},
-            {'title': '站点domain', 'key': 'domain', 'sortable': True},
-            {'title': '隐私类型', 'key': 'privacy', 'sortable': True}
-        ]
+        # Build custom table rows (header + data) so RSS column can use <a> hyperlinks
+        # Column layout: 索引器名称(4) | 隐私类型(2) | 站点domain(3) | RSS链接(3)
+        header_row = {
+            'component': 'VRow',
+            'props': {'class': 'font-weight-bold text-caption align-center py-1 px-2'},
+            'content': [
+                {'component': 'VCol', 'props': {'cols': 4}, 'content': [{'component': 'span', 'text': '索引器名称'}]},
+                {'component': 'VCol', 'props': {'cols': 2}, 'content': [{'component': 'span', 'text': '隐私类型'}]},
+                {'component': 'VCol', 'props': {'cols': 3}, 'content': [{'component': 'span', 'text': '站点domain'}]},
+                {'component': 'VCol', 'props': {'cols': 3}, 'content': [{'component': 'span', 'text': 'RSS链接'}]},
+            ]
+        }
 
-        # Build table items
-        items = []
-        if self._indexers:
-            for site in self._indexers:
-                # 根据隐私类型显示对应文字
-                privacy = site.get("privacy", "private")
-                if privacy == "public":
-                    privacy_text = "公开"
-                elif privacy == "semiPrivate":
-                    privacy_text = "半私有"
-                else:  # private 或其他
-                    privacy_text = "私有"
-
-                items.append({
-                    'name': site.get("name", "Unknown"),
-                    'domain': site.get("domain", "N/A"),
-                    'privacy': privacy_text
-                })
-
-        # Build RSS links list (one <a> row per indexer)
-        rss_rows = []
+        data_rows = []
         for site in self._indexers:
-            rss_url = site.get("rss", "")
-            if not rss_url:
-                continue
-            # Strip plugin prefix from display name
+            privacy = site.get("privacy", "private")
+            if privacy == "public":
+                privacy_text = "公开"
+            elif privacy == "semiPrivate":
+                privacy_text = "半私有"
+            else:
+                privacy_text = "私有"
+
             display_name = site.get("name", "Unknown")
             prefix = f"{self.plugin_name}-"
             if display_name.startswith(prefix):
                 display_name = display_name[len(prefix):]
-            rss_rows.append({
+
+            domain = site.get("domain", "N/A")
+            rss_url = site.get("rss", "")
+
+            rss_col_content = (
+                [{'component': 'a',
+                  'props': {'href': rss_url, 'target': '_blank', 'title': rss_url},
+                  'text': '复制RSS链接'}]
+                if rss_url else
+                [{'component': 'span', 'text': '-'}]
+            )
+
+            data_rows.append({
                 'component': 'VRow',
-                'props': {'class': 'align-center py-1 px-2'},
+                'props': {'class': 'text-caption align-center py-1 px-2'},
                 'content': [
-                    {
-                        'component': 'VCol',
-                        'props': {'cols': 5, 'class': 'text-caption text-truncate'},
-                        'content': [{'component': 'span', 'text': display_name}]
-                    },
-                    {
-                        'component': 'VCol',
-                        'props': {'cols': 7, 'class': 'text-caption'},
-                        'content': [
-                            {
-                                'component': 'a',
-                                'props': {
-                                    'href': rss_url,
-                                    'target': '_blank',
-                                    'title': rss_url
-                                },
-                                'text': 'RSS订阅链接'
-                            }
-                        ]
-                    }
+                    {'component': 'VCol', 'props': {'cols': 4, 'class': 'text-truncate'}, 'content': [{'component': 'span', 'text': display_name}]},
+                    {'component': 'VCol', 'props': {'cols': 2}, 'content': [{'component': 'span', 'text': privacy_text}]},
+                    {'component': 'VCol', 'props': {'cols': 3, 'class': 'text-truncate'}, 'content': [{'component': 'span', 'text': domain}]},
+                    {'component': 'VCol', 'props': {'cols': 3}, 'content': rss_col_content},
                 ]
             })
 
@@ -1674,36 +1660,7 @@ class ProwlarrIndexer(_PluginBase):
                     }
                 ]
             },
-            # ── 说明提示 ─────────────────────────────────
-            {
-                'component': 'VRow',
-                'content': [
-                    {
-                        'component': 'VCol',
-                        'props': {'cols': 12},
-                        'content': [
-                            {
-                                'component': 'VAlert',
-                                'props': {
-                                    'type': 'info',
-                                    'variant': 'tonal',
-                                    'border': 'start',
-                                    'title': '使用说明',
-                                    'text': (
-                                        '站点已自动注册，无需在站点管理中手动添加。\n'
-                                        '• 订阅模式（RSS）：将本插件站点加入「订阅站点」后，'
-                                        'MoviePilot 将通过下方 RSS 链接自动抓取最新种子。\n'
-                                        '• 刷流模式（Spider）：同样支持，可将站点加入刷流任务。\n'
-                                        '• 如需在站点管理中手动确认，站点 domain 格式为 '
-                                        'prowlarr_indexer.{索引器ID}，如下表所示。'
-                                    )
-                                }
-                            }
-                        ]
-                    }
-                ]
-            },
-            # ── 索引器总览表 ──────────────────────────────
+            # ── 索引器列表（含 RSS 超链接列）────────────────
             {
                 'component': 'VRow',
                 'content': [
@@ -1717,19 +1674,12 @@ class ProwlarrIndexer(_PluginBase):
                                 'content': [
                                     {
                                         'component': 'VCardText',
+                                        'props': {'class': 'pa-2'},
                                         'content': [
                                             {
-                                                'component': 'VDataTableVirtual',
-                                                'props': {
-                                                    'class': 'text-sm',
-                                                    'headers': headers,
-                                                    'items': items,
-                                                    'height': '20rem',
-                                                    'density': 'compact',
-                                                    'fixed-header': True,
-                                                    'hide-no-data': True,
-                                                    'hover': True
-                                                }
+                                                'component': 'div',
+                                                'props': {'style': 'max-height:30rem; overflow-y:auto'},
+                                                'content': [header_row] + data_rows
                                             }
                                         ]
                                     }
@@ -1740,44 +1690,6 @@ class ProwlarrIndexer(_PluginBase):
                 ]
             },
         ]
-
-        # ── RSS 订阅链接列表（仅在有索引器时渲染）──────────
-        if rss_rows:
-            page.append({
-                'component': 'VRow',
-                'content': [
-                    {
-                        'component': 'VCol',
-                        'props': {'cols': 12},
-                        'content': [
-                            {
-                                'component': 'VCard',
-                                'props': {'class': 'pa-0'},
-                                'content': [
-                                    {
-                                        'component': 'VCardTitle',
-                                        'props': {'class': 'text-subtitle-1 px-4 pt-3'},
-                                        'text': 'RSS 订阅链接'
-                                    },
-                                    {
-                                        'component': 'VCardText',
-                                        'props': {'class': 'px-2 pb-2'},
-                                        'content': [
-                                            {
-                                                'component': 'div',
-                                                'props': {
-                                                    'style': 'max-height:20rem;overflow-y:auto'
-                                                },
-                                                'content': rss_rows
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            })
 
         return page
 
