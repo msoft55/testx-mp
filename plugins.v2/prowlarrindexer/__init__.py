@@ -488,7 +488,7 @@ class ProwlarrIndexer(_PluginBase):
             ("apikey", self._api_key),
             ("q", ""),
             ("cat", ",".join(cat_ids)),
-            ("limit", 100),
+            ("limit", 30),
         ]
         query_string = urlencode(params)
         return f"{self._host.rstrip('/')}/api/v1/indexer/{indexer_id}/newznab?{query_string}"
@@ -1588,16 +1588,16 @@ class ProwlarrIndexer(_PluginBase):
 
         status_info.append(f'索引器数量：{len(self._indexers)}')
 
-        # Build custom table rows (header + data) so RSS column can use <a> hyperlinks
-        # Column layout: 索引器名称(4) | 隐私类型(2) | 站点domain(3) | RSS链接(3)
+        # Build custom table rows so RSS column can use <a> hyperlinks
+        # Column layout: 索引器名称(5) | 隐私类型(2) | 站点domain(3) | RSS链接(2)
         header_row = {
             'component': 'VRow',
             'props': {'class': 'font-weight-bold text-caption align-center py-1 px-2'},
             'content': [
-                {'component': 'VCol', 'props': {'cols': 4}, 'content': [{'component': 'span', 'text': '索引器名称'}]},
+                {'component': 'VCol', 'props': {'cols': 5}, 'content': [{'component': 'span', 'text': '索引器名称'}]},
                 {'component': 'VCol', 'props': {'cols': 2}, 'content': [{'component': 'span', 'text': '隐私类型'}]},
                 {'component': 'VCol', 'props': {'cols': 3}, 'content': [{'component': 'span', 'text': '站点domain'}]},
-                {'component': 'VCol', 'props': {'cols': 3}, 'content': [{'component': 'span', 'text': 'RSS链接'}]},
+                {'component': 'VCol', 'props': {'cols': 2}, 'content': [{'component': 'span', 'text': 'RSS链接'}]},
             ]
         }
 
@@ -1612,10 +1612,6 @@ class ProwlarrIndexer(_PluginBase):
                 privacy_text = "私有"
 
             display_name = site.get("name", "Unknown")
-            prefix = f"{self.plugin_name}-"
-            if display_name.startswith(prefix):
-                display_name = display_name[len(prefix):]
-
             domain = site.get("domain", "N/A")
             rss_url = site.get("rss", "")
 
@@ -1631,10 +1627,10 @@ class ProwlarrIndexer(_PluginBase):
                 'component': 'VRow',
                 'props': {'class': 'text-caption align-center py-1 px-2'},
                 'content': [
-                    {'component': 'VCol', 'props': {'cols': 4, 'class': 'text-truncate'}, 'content': [{'component': 'span', 'text': display_name}]},
+                    {'component': 'VCol', 'props': {'cols': 5, 'class': 'text-truncate'}, 'content': [{'component': 'span', 'text': display_name}]},
                     {'component': 'VCol', 'props': {'cols': 2}, 'content': [{'component': 'span', 'text': privacy_text}]},
                     {'component': 'VCol', 'props': {'cols': 3, 'class': 'text-truncate'}, 'content': [{'component': 'span', 'text': domain}]},
-                    {'component': 'VCol', 'props': {'cols': 3}, 'content': rss_col_content},
+                    {'component': 'VCol', 'props': {'cols': 2}, 'content': rss_col_content},
                 ]
             })
 

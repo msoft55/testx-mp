@@ -1,9 +1,9 @@
 {
   "ProwlarrIndexer": {
     "name": "Prowlarr索引器",
-    "description": "集成Prowlarr索引器搜索，支持多站点统一搜索。仅索引私有和半公开站点。",
-    "labels": "站点,prowlarr,search",
-    "version": "1.6.0",
+    "description": "集成Prowlarr索引器搜索，支持多站点统一搜索、RSS订阅及Spider浏览。仅索引私有和半公开站点。",
+    "labels": "站点,prowlarr,search,rss",
+    "version": "1.7.0",
     "icon": "Prowlarr.png",
     "author": "Claude",
     "level": 2,
@@ -14,14 +14,15 @@
       "v1.3.0": "修正XXX过滤逻辑；增强API请求日志；基于真实数据验证字段类型",
       "v1.4.0": "优化错误信息显示；调整日志等级；删除连通性测试；删除grabs字段；统一变量命名",
       "v1.5.0": "新增搜索API端点；支持外部调用搜索功能；支持指定索引器搜索；支持IMDb ID和关键词搜索",
-      "v1.6.0": "当搜索词为中文时自动对本插件索引器使用英文标题补充搜索"
+      "v1.6.0": "当搜索词为中文时自动对本插件索引器使用英文标题补充搜索",
+      "v1.7.0": "新增RSS订阅支持；新增Spider模式浏览最新种子"
     }
   },
   "JackettIndexer": {
     "name": "Jackett索引器",
-    "description": "集成Jackett索引器搜索，支持Torznab协议多站点搜索。仅索引私有和半公开站点。",
-    "labels": "站点,jackett,search",
-    "version": "1.6.0",
+    "description": "集成Jackett索引器搜索，支持Torznab协议多站点搜索、RSS订阅及Spider浏览。仅索引私有和半公开站点。",
+    "labels": "站点,jackett,search,rss",
+    "version": "1.7.0",
     "icon": "Jackett_A.png",
     "author": "Claude",
     "level": 2,
@@ -32,7 +33,8 @@
       "v1.3.0": "修正XXX过滤逻辑；增强API请求日志；基于真实数据验证字段类型",
       "v1.4.0": "优化错误信息显示；调整日志等级；删除连通性测试；统一变量命名",
       "v1.5.0": "新增搜索API端点；支持外部调用搜索功能；支持指定索引器搜索；支持IMDb ID和关键词搜索",
-      "v1.6.0": "当搜索词为中文时自动对本插件索引器使用英文标题补充搜索"
+      "v1.6.0": "当搜索词为中文时自动对本插件索引器使用英文标题补充搜索",
+      "v1.7.0": "新增RSS订阅支持；新增Spider模式浏览最新种子"
     }
   },
   "TraktSync": {
@@ -48,7 +50,7 @@
       "v0.2.0": "新增详情页展示同步历史；修复搜索下载逻辑；支持删除历史记录",
       "v0.3.0": "新增详情页；新增订阅状态控制；搜索下载功能；操作类型优化",
       "v0.4.0": "新增工作流动作：同步Trakt自定义列表",
-      "v0.5.0": "新增OAuth授权回调API；支持自动授权；优化Token失效通知"
+      "v0.5.0": "支持自动授权；优化Token失效通知"
     }
   }
 }
