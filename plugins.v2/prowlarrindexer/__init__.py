@@ -42,13 +42,13 @@ class ProwlarrIndexer(_PluginBase):
     """
 
     # Plugin metadata
-    plugin_name = "Prowlarr索引器"
-    plugin_desc = "集成Prowlarr索引器搜索，支持多站点统一搜索。仅索引私有和半公开站点。"
+    plugin_name = "Prowlarr索引器V2"
+    plugin_desc = "集成Prowlarr索引器搜索，支持多站点统一搜索。支持自定义索引器类型过滤。"
     plugin_icon = "Prowlarr.png"
-    plugin_version = "1.7.0"
-    plugin_author = "Claude"
-    author_url = "https://github.com"
-    plugin_config_prefix = "prowlarrindexer_"
+    plugin_version = "1.8.0"
+    plugin_author = "ClaudeV2"
+    author_url = "https://github.com/mitlearn/MoviePilot-PluginsV2"
+    plugin_config_prefix = "prowlarrindexerv2_"
     plugin_order = 15
     auth_level = 2
 
@@ -59,6 +59,7 @@ class ProwlarrIndexer(_PluginBase):
     _proxy: bool = False
     _cron: str = "0 0 */12 * *"  # Sync indexers every 12 hours
     _onlyonce: bool = False
+    _included_categories: Dict[str, bool] = {"movies": True, "tv": True, "xxx": False, "audio": False, "console": False, "pc": False, "books": False, "other": False}  # 包含的索引器类型
     _indexers: List[Dict[str, Any]] = []
     _scheduler: Optional[BackgroundScheduler] = None
     _sites_helper: Optional[SitesHelper] = None
@@ -69,7 +70,7 @@ class ProwlarrIndexer(_PluginBase):
 
     # Domain identifier for indexer (matching reference implementation pattern)
     # Format: plugin_name.author
-    PROWLARR_DOMAIN = "prowlarr_indexer.claude"
+    PROWLARR_DOMAIN = "prowlarr_indexer.claudev2"
 
     def init_plugin(self, config: dict = None):
         """
@@ -92,6 +93,17 @@ class ProwlarrIndexer(_PluginBase):
             self._proxy = config.get("proxy", False)
             self._cron = config.get("cron", "0 0 */12 * *")
             self._onlyonce = config.get("onlyonce", False)
+            # Load included categories configuration
+            self._included_categories = {
+                "movies": config.get("include_movies", True),
+                "tv": config.get("include_tv", True),
+                "xxx": config.get("include_xxx", False),
+                "audio": config.get("include_audio", False),
+                "console": config.get("include_console", False),
+                "pc": config.get("include_pc", False),
+                "books": config.get("include_books", False),
+                "other": config.get("include_other", False)
+            }
 
         # Validate configuration
         if not self._enabled:
@@ -166,21 +178,13 @@ class ProwlarrIndexer(_PluginBase):
             # Build indexer dicts
             self._indexers = []
             filtered_count = 0
-            xxx_filtered_count = 0
             for indexer_data in indexers:
                 try:
-                    indexer_dict, is_xxx_only = self._build_indexer_dict(indexer_data)
+                    indexer_dict, should_filter = self._build_indexer_dict(indexer_data)
 
-                    # 过滤掉公开站点，保留私有和半公开站点
-                    if indexer_dict.get("public", False):
-                        logger.info(f"【{self.plugin_name}】过滤公开站点：{indexer_dict.get('name', 'Unknown')}")
+                    # 根据分类过滤逻辑决定是否添加索引器
+                    if should_filter:
                         filtered_count += 1
-                        continue
-
-                    # 过滤掉只有XXX分类的索引器
-                    if is_xxx_only:
-                        logger.debug(f"【{self.plugin_name}】过滤仅XXX分类站点：{indexer_dict.get('name', 'Unknown')}")
-                        xxx_filtered_count += 1
                         continue
 
                     self._indexers.append(indexer_dict)
@@ -188,7 +192,7 @@ class ProwlarrIndexer(_PluginBase):
                     logger.error(f"【{self.plugin_name}】构建索引器失败：{str(e)}")
                     continue
 
-            logger.info(f"【{self.plugin_name}】成功获取 {len(self._indexers)} 个索引器（私有+半公开），过滤掉 {filtered_count} 个公开站点，{xxx_filtered_count} 个XXX专属站点")
+            logger.info(f"【{self.plugin_name}】成功获取 {len(self._indexers)} 个索引器，过滤掉 {filtered_count} 个不符合类型要求的索引器")
             return True
 
         except Exception as e:
@@ -371,15 +375,31 @@ class ProwlarrIndexer(_PluginBase):
                 except (ValueError, TypeError):
                     continue
 
-            # Check if indexer is XXX-only (has 6000 but no other useful categories)
-            # Only filter pure XXX sites, keep Music/Audio/etc sites
-            has_xxx = 6000 in top_level_categories
-            has_other_content = any(cat in top_level_categories for cat in [2000, 5000, 3000, 4000, 1000, 7000, 8000])
-
-            is_xxx_only = has_xxx and not has_other_content
-
-            if is_xxx_only:
-                logger.debug(f"【{self.plugin_name}】索引器 {indexer_name} 仅包含XXX分类，顶层分类：{sorted(top_level_categories)}")
+            # 检测索引器的主要类型
+            # Torznab 分类系统：
+            # 2000 = 电影, 5000 = 电视, 6000 = XXX, 3000 = 音频, 1000 = PC, 4000 = 游戏/控制台, 7000 = 书籍, 8000 = 其他
+            category_types = {
+                2000: "movies",
+                5000: "tv",
+                6000: "xxx",
+                3000: "audio",
+                4000: "console",
+                1000: "pc",
+                7000: "books",
+                8000: "other"
+            }
+            
+            # 检查索引器是否包含用户选择的类型
+            has_included_category = False
+            for top_level in top_level_categories:
+                category_type = category_types.get(top_level)
+                if category_type and self._included_categories.get(category_type, False):
+                    has_included_category = True
+                    break
+            
+            # 如果索引器不包含用户选择的任何类型，则过滤掉
+            if not has_included_category:
+                logger.debug(f"【{self.plugin_name}】索引器 {indexer_name} 不包含用户选择的类型，顶层分类：{sorted(top_level_categories)}")
                 return None, True
 
             # If indexer has no movie/tv categories, still allow it (might be Music, Audio, etc.)
@@ -424,7 +444,7 @@ class ProwlarrIndexer(_PluginBase):
 
         # Detect if indexer is public or private
         # Prowlarr privacy: "public" = 公开, "private" = 私有, "semiPrivate" = 半私有
-        # 只过滤公开站点，保留私有和半公开站点
+        # 不进行站点过滤，包含所有类型的站点
         privacy = indexer.get("privacy", "private")
         is_public = (privacy == "public")  # "public"=公开
 
@@ -1530,6 +1550,161 @@ class ProwlarrIndexer(_PluginBase):
                                     {
                                         'component': 'VAlert',
                                         'props': {
+                                            'type': 'info',
+                                            'variant': 'tonal',
+                                            'title': '索引器类型选择',
+                                            'text': '选择您想要包含的索引器类型，未选择的类型将被过滤掉。'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'include_movies',
+                                            'label': '电影',
+                                            'hint': '包含电影索引器',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'include_tv',
+                                            'label': '电视',
+                                            'hint': '包含电视索引器',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'include_xxx',
+                                            'label': 'XXX',
+                                            'hint': '包含成人内容索引器',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'include_audio',
+                                            'label': '音频',
+                                            'hint': '包含音频索引器',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'include_console',
+                                            'label': '控制台',
+                                            'hint': '包含游戏控制台索引器',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'include_pc',
+                                            'label': 'PC',
+                                            'hint': '包含PC软件索引器',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'include_books',
+                                            'label': '书籍',
+                                            'hint': '包含书籍索引器',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'include_other',
+                                            'label': '其他',
+                                            'hint': '包含其他类型索引器',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
                                             'type': 'warning',
                                             'variant': 'tonal',
                                             'border': 'start',
@@ -1569,7 +1744,15 @@ class ProwlarrIndexer(_PluginBase):
             "api_key": "",
             "proxy": False,
             "cron": "0 0 */12 * *",
-            "onlyonce": False
+            "onlyonce": False,
+            "include_movies": True,
+            "include_tv": True,
+            "include_xxx": False,
+            "include_audio": False,
+            "include_console": False,
+            "include_pc": False,
+            "include_books": False,
+            "include_other": False
         }
 
     def get_page(self) -> List[dict]:
