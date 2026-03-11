@@ -33,12 +33,13 @@ from app.utils.string import StringUtils
 from .agenttool import SearchTorrentsTool, ListIndexersTool
 
 
-class ProwlarrIndexer(_PluginBase):
+class ProwlarrIndexerV2(_PluginBase):
     """
-    Prowlarr Indexer Plugin
+    Prowlarr Indexer V2 Plugin
 
     Provides torrent search functionality through Prowlarr API.
     Registers all configured Prowlarr indexers as MoviePilot sites.
+    Supports custom indexer type filtering.
     """
 
     # Plugin metadata

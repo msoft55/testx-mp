@@ -66,13 +66,13 @@ class SearchTorrentsTool(MoviePilotTool):
         try:
             # 获取插件实例
             plugins = PluginManager().running_plugins
-            plugin_instance = plugins.get("ProwlarrIndexer")
+            plugin_instance = plugins.get("ProwlarrIndexerV2")
 
             if not plugin_instance:
-                return "❌ ProwlarrIndexer 插件未运行"
+                return "❌ ProwlarrIndexerV2 插件未运行"
 
             if not plugin_instance._enabled:
-                return "❌ ProwlarrIndexer 插件未启用"
+                return "❌ ProwlarrIndexerV2 插件未启用"
 
             # 调用插件的搜索API
             results = plugin_instance.api_search(
@@ -158,13 +158,13 @@ class ListIndexersTool(MoviePilotTool):
         try:
             # 获取插件实例
             plugins = PluginManager().running_plugins
-            plugin_instance = plugins.get("ProwlarrIndexer")
+            plugin_instance = plugins.get("ProwlarrIndexerV2")
 
             if not plugin_instance:
-                return "❌ ProwlarrIndexer 插件未运行"
+                return "❌ ProwlarrIndexerV2 插件未运行"
 
             if not plugin_instance._enabled:
-                return "❌ ProwlarrIndexer 插件未启用"
+                return "❌ ProwlarrIndexerV2 插件未启用"
 
             # 获取索引器列表
             indexers = plugin_instance.get_indexers()
@@ -195,7 +195,7 @@ class ListIndexersTool(MoviePilotTool):
 
                 # 站点名称（去掉插件前缀）
                 site_name = indexer.get("name", "Unknown")
-                plugin_prefix = "Prowlarr索引器-"
+                plugin_prefix = "Prowlarr索引器V2-"
                 if site_name.startswith(plugin_prefix):
                     site_name = site_name[len(plugin_prefix):]
 
