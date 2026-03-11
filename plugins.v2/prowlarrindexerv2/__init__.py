@@ -1108,13 +1108,9 @@ class ProwlarrIndexerV2(_PluginBase):
                 proxies=self._proxy
             ).get_res(url, timeout=60)
 
-            # Check if response is None or False
+            # Check if response is None
             if response is None:
                 logger.error(f"【{self.plugin_name}】搜索API请求失败：response 为 None")
-                return []
-
-            if not response:
-                logger.error(f"【{self.plugin_name}】搜索API请求失败：response 为 {type(response)}")
                 return []
 
             # Check if response has required attributes
