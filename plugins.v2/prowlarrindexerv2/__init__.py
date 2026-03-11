@@ -493,13 +493,30 @@ class ProwlarrIndexerV2(_PluginBase):
         Returns:
             Prowlarr Newznab RSS URL string
         """
-        # Determine Torznab categories based on indexer capabilities
+        # Determine Torznab categories based on indexer capabilities and user preferences
         cat_ids = []
-        if category:
-            if category.get("movie"):
-                cat_ids.append("2000")
-            if category.get("tv"):
-                cat_ids.append("5000")
+        # Map category types to Torznab category IDs
+        category_map = {
+            "movies": "2000",
+            "tv": "5000",
+            "xxx": "6000",
+            "audio": "3000",
+            "console": "4000",
+            "pc": "1000",
+            "books": "7000",
+            "other": "8000"
+        }
+        
+        # Check each category type
+        for cat_type, cat_id in category_map.items():
+            # For movies and TV, check if indexer supports them
+            if cat_type in ["movies", "tv"]:
+                if category and category.get(cat_type[:-1]) and self._included_categories.get(cat_type, False):
+                    cat_ids.append(cat_id)
+            # For other categories, just check if user has selected them
+            elif self._included_categories.get(cat_type, False):
+                cat_ids.append(cat_id)
+        
         if not cat_ids:
             # Default: fetch both movies and TV
             cat_ids = ["2000", "5000"]
@@ -813,8 +830,9 @@ class ProwlarrIndexerV2(_PluginBase):
                 ("limit", 100),
                 ("offset", page * 100 if page else 0),
             ]
-            # Add default categories
-            for cat_id in [2000, 5000]:
+            # Add user-selected categories
+            categories = self._get_categories()
+            for cat_id in categories:
                 params.append(("categories", cat_id))
 
             api_results = self._search_prowlarr_api(params, indexer_id)
@@ -1025,10 +1043,9 @@ class ProwlarrIndexerV2(_PluginBase):
 
         return params
 
-    @staticmethod
-    def _get_categories(mtype: Optional[MediaType] = None) -> List[int]:
+    def _get_categories(self, mtype: Optional[MediaType] = None) -> List[int]:
         """
-        Get Torznab category IDs based on media type.
+        Get Torznab category IDs based on media type and user preferences.
 
         Args:
             mtype: Media type (MOVIE, TV, or None for all)
@@ -1036,14 +1053,30 @@ class ProwlarrIndexerV2(_PluginBase):
         Returns:
             List of category IDs
         """
-        if not mtype:
-            return [2000, 5000]  # Both movies and TV
-        elif mtype == MediaType.MOVIE:
-            return [2000]  # Movies
-        elif mtype == MediaType.TV:
-            return [5000]  # TV shows
-        else:
-            return [2000, 5000]
+        # Map category types to Torznab category IDs
+        category_map = {
+            "movies": 2000,
+            "tv": 5000,
+            "xxx": 6000,
+            "audio": 3000,
+            "console": 4000,
+            "pc": 1000,
+            "books": 7000,
+            "other": 8000
+        }
+        
+        # Get categories based on user preferences
+        # Always include all user-selected categories regardless of media type
+        categories = []
+        for cat_type, cat_id in category_map.items():
+            if self._included_categories.get(cat_type, False):
+                categories.append(cat_id)
+        
+        # If no categories selected, default to movies and TV
+        if not categories:
+            categories = [2000, 5000]
+        
+        return categories
 
     def _search_prowlarr_api(self, params: List[Tuple[str, Any]], indexer_name: int = None) -> List[Dict[str, Any]]:
         """
